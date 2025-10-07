@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 14d23cd2d8240244baa6026ca98df0bf
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287711
+  packageName: 'FishNet Pro: Networking Evolved'
+  packageVersion: 4.6.14R Pro
+  assetPath: Assets/FishNet/Demos/ColliderRollback/Materials/Wall.mat
+  uploadId: 798246

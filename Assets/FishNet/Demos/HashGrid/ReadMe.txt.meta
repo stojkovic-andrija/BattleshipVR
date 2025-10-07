@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 4193a544613faaf4a8dd0a4a215523f3
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287711
+  packageName: 'FishNet Pro: Networking Evolved'
+  packageVersion: 4.6.14R Pro
+  assetPath: Assets/FishNet/Demos/HashGrid/ReadMe.txt
+  uploadId: 798246

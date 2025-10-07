@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 99947f0521cb96a4087d4496b8761a23
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287711
+  packageName: 'FishNet Pro: Networking Evolved'
+  packageVersion: 4.6.14R Pro
+  assetPath: Assets/FishNet/Demos/HashGrid/Scenes/HashGrid_Demo.unity
+  uploadId: 798246

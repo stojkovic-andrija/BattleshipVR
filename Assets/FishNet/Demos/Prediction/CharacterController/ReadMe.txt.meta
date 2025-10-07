@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 242afb68b5bce2f40ab2da029c12d008
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287711
+  packageName: 'FishNet Pro: Networking Evolved'
+  packageVersion: 4.6.14R Pro
+  assetPath: Assets/FishNet/Demos/Prediction/CharacterController/ReadMe.txt
+  uploadId: 798246

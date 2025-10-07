@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 8fa881c2b33440b488753a73333b050d
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 4890085278179872738
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287711
+  packageName: 'FishNet Pro: Networking Evolved'
+  packageVersion: 4.6.14R Pro
+  assetPath: Assets/FishNet/Demos/SceneManager (Old Examples)/Scenes/Replace/ReplaceMainSettings.lighting
+  uploadId: 798246

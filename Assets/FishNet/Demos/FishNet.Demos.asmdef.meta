@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 0bb35fc3181999548a4abea731e00e89
+AssemblyDefinitionImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287711
+  packageName: 'FishNet Pro: Networking Evolved'
+  packageVersion: 4.6.14R Pro
+  assetPath: Assets/FishNet/Demos/FishNet.Demos.asmdef
+  uploadId: 798246
