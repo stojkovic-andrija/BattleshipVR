@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 311405573dd315b4b98b199a9ac958b6, type: 3}
+  m_Name: GameSettingsSO
+  m_EditorClassIdentifier: 
+  _gridSize: 10
+  _boatTypes:
+  - {fileID: 11400000, guid: 6b0d0b5426696a8439142c38b771dc9c, type: 2}
+  - {fileID: 11400000, guid: 59c1bfdf23d2c184b8f4d7e85f1e8325, type: 2}
+  - {fileID: 11400000, guid: 88ec5a264dd9ece4589f1cb9ea3e50ec, type: 2}
+  - {fileID: 11400000, guid: 92cdd10df01bc7e4fa10b765e160be0d, type: 2}
+  - {fileID: 11400000, guid: bd7bf5218597af74f9e6f2e972b750fd, type: 2}
+  _placementSeconds: 60
+  _confirmSeconds: 5
+  _turnSeconds: 25
+  _revealSeconds: 3
+  _autoConfirmWhenBothReady: 1
+  _firstFinisherGetsFirstTurn: 1
