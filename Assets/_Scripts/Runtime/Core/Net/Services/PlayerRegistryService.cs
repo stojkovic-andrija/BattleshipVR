@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FishNet.Connection;
 using FishNet.Managing;
 using FishNet.Managing.Server;
@@ -5,7 +6,6 @@ using FishNet.Transporting;
 
 namespace BattleshipsVR.Net.Services
 {
-    /// <summary>Deterministic 2 player roster with opponent lookup and disconnect signal</summary>
     public sealed class PlayerRegistryService
     {
         public event System.Action<NetworkConnection, NetworkConnection> OnRosterReady;
@@ -17,13 +17,21 @@ namespace BattleshipsVR.Net.Services
         private NetworkConnection _playerB;
         private bool _ready;
 
-        /// <summary>Hooks FishNet server events to maintain the roster</summary>
+        /// <summary>Iterates currently connected players (0–2).</summary>
+        public IEnumerable<NetworkConnection> AllConnections
+        {
+            get
+            {
+                if (_playerA != null) yield return _playerA;
+                if (_playerB != null) yield return _playerB;
+            }
+        }
+
         public void ServerHook(NetworkManager networkManager)
         {
             networkManager.ServerManager.OnRemoteConnectionState += HandleRemoteState;
         }
 
-        /// <summary>Returns the other player or null when not available</summary>
         public NetworkConnection GetOpponent(NetworkConnection c)
         {
             if (c == _playerA) return _playerB;

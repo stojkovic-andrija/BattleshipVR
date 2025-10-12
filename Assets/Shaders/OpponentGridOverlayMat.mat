@@ -1,0 +1,45 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: OpponentGridOverlayMat
+  m_Shader: {fileID: 4800000, guid: 9b0cdbc52955ced40884c9bb1e53a576, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs: []
+    m_Ints: []
+    m_Floats:
+    - _BadAlpha: 0.5
+    - _BadFlashHz: 3.3333
+    - _CellSize: 1
+    - _FlipU: 0
+    - _FlipV: 0
+    - _GoodAlpha: 0.35
+    - _GoodFlashHz: 1
+    - _LineWidth: 0.0258
+    - _SwapUV: 0
+    - _ZTest: 4
+    m_Colors:
+    - _BadColor: {r: 1, g: 0.24999997, b: 0.24999997, a: 1}
+    - _GoodColor: {r: 0.24999997, g: 1, b: 0.5, a: 1}
+    - _GridColor: {r: 1, g: 0.7350592, b: 0.7294118, a: 1}
+    - _GridOriginWS: {r: -5, g: 0, b: -5, a: 0}
+    - _GridScale: {r: 10, g: 10, b: 0, a: 0}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

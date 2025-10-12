@@ -14,6 +14,8 @@ namespace BattleshipsVR.Net.Services
     public sealed class PlacementService : NetworkBehaviour
     {
         public event System.Action<NetworkConnection> OnPlacementCommitted;
+        public event System.Action<int> OnPlacementTimerStarted; // seconds
+        public event System.Action OnPlacementTimerEnded;
 
         [Inject] private GameSettingsSO _settings;
         [Inject] private BoardService _boardService;
@@ -35,13 +37,30 @@ namespace BattleshipsVR.Net.Services
             _gameState.OnGameStateChanged -= HandleStateChanged;
         }
 
-        /// <summary>Client sends compact fleet intent, server reconstructs masks</summary>
+        /// <summary>Client sends compact fleet intent, server reconstructs masks (full set).</summary>
         [ServerRpc(RequireOwnership = false)]
-        public void ClientSubmitPlacementServerRpc(FleetPlacementData data, NetworkConnection caller)
+        public void ClientSubmitPlacementServerRpc(FleetPlacementData data, NetworkConnection caller = null)
         {
             if (!_validator.ServerTryBuildFleet(data, out var fleet))
                 return;
 
+            ServerCommitFleet(caller, ref fleet);
+        }
+
+        /// <summary>Client sends partial; server fills the rest randomly.</summary>
+        [ServerRpc(RequireOwnership = false)]
+        public void ClientSubmitPartialPlacementServerRpc(FleetPlacementData data, NetworkConnection caller = null)
+        {
+            if (!_validator.ServerTryBuildFleetFromPartial(data, out var fleet, out var missing))
+                return;
+
+            _validator.ServerFillRandomShips(ref fleet, missing);
+            ServerCommitFleet(caller, ref fleet);
+        }
+
+        [Server]
+        private void ServerCommitFleet(NetworkConnection caller, ref BoardService.FleetState fleet)
+        {
             _boardService.ServerSetFleet(caller, fleet);
 
             if (!_hasCommitted.ContainsKey(caller))
@@ -58,7 +77,10 @@ namespace BattleshipsVR.Net.Services
         private void HandleStateChanged(GameState state)
         {
             if (state == GameState.PLACEMENT)
+            {
+                NotifyPlacementTimerStartedObserversRpc(_settings.PlacementSeconds);
                 StartPlacementTimerAsync(_settings.PlacementSeconds).Forget();
+            }
         }
 
         [Server]
@@ -75,10 +97,12 @@ namespace BattleshipsVR.Net.Services
             {
                 await UniTask.Delay(seconds * 1000, cancellationToken: _placementCts.Token);
                 TryCompletePlacement(force: true);
+                NotifyPlacementTimerEndedObserversRpc();
             }
             catch (System.OperationCanceledException)
             {
                 // timer cancelled by both ready
+                NotifyPlacementTimerEndedObserversRpc();
             }
         }
 
@@ -86,6 +110,22 @@ namespace BattleshipsVR.Net.Services
         private void TryCompletePlacement(bool force = false)
         {
             if (!_roster.HasBothPlayers && !force) return;
+
+            // For any uncommitted players, create a full random fleet so the game can start
+            foreach (var conn in _roster.AllConnections)
+            {
+                if (conn == null) continue;
+                if (_hasCommitted.TryGetValue(conn, out bool committed) && committed) continue;
+
+                // Build empty fleet state and fill all boats randomly.
+                var empty = new BoardService.FleetState();
+                var missing = new List<byte>();
+                foreach (var bt in _settings.BoatTypes)
+                    if (bt != null) missing.Add(bt.TypeId);
+
+                _validator.ServerFillRandomShips(ref empty, missing);
+                ServerCommitFleet(conn, ref empty);
+            }
 
             // pick order by commit timestamp when both are ready
             List<(NetworkConnection conn, long tick)> ready = new();
@@ -102,6 +142,18 @@ namespace BattleshipsVR.Net.Services
             _placementCts = null;
 
             _gameState.ServerBeginBattle(first);
+        }
+
+        [ObserversRpc(BufferLast = false)]
+        private void NotifyPlacementTimerStartedObserversRpc(int seconds)
+        {
+            OnPlacementTimerStarted?.Invoke(seconds);
+        }
+
+        [ObserversRpc(BufferLast = false)]
+        private void NotifyPlacementTimerEndedObserversRpc()
+        {
+            OnPlacementTimerEnded?.Invoke();
         }
     }
 }
