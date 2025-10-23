@@ -2,6 +2,10 @@
 
 Two-player Battleships prototype for Desktop and VR in one build. Server authoritative with FishNet. Follows the test flow: lobby, placement, confirmation, alternating turns, hit or miss feedback, timer, win or lose, restart.
 
+Grab the .exe here: https://drive.google.com/file/d/1lH57eWkM42D2b__9XfP86kqwC9UIwEdS/view?usp=sharing
+
+Gameplay video: https://youtu.be/PC9Dm8XukTg
+
 ---
 
 ## Table of Contents
