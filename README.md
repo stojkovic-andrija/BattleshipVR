@@ -1,4 +1,4 @@
-# Battleships VR
+# Battleship VR
 
 Two-player Battleships prototype for Desktop and VR in one build. Server authoritative with FishNet. Follows the test flow: lobby, placement, confirmation, alternating turns, hit or miss feedback, timer, win or lose, restart.
 
