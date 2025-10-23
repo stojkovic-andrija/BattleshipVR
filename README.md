@@ -1,3 +1,6 @@
+
+<img width="1024" height="494" alt="BVR Logo banner" src="https://github.com/user-attachments/assets/443087cf-3700-46b1-b346-8933b479ed10" />
+
 # Battleship VR
 
 Two-player Battleships prototype for Desktop and VR in one build. Server authoritative with FishNet. Follows the test flow: lobby, placement, confirmation, alternating turns, hit or miss feedback, timer, win or lose, restart.
