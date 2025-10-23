@@ -10,12 +10,17 @@ using BattleshipsVR.Net.Data;
 
 namespace BattleshipsVR.Net.Services
 {
-    /// <summary>Collects placements, validates on server, picks who shoots first</summary>
+    /// <summary>Collects placements, validates on server, and selects the first shooter.</summary>
     public sealed class PlacementService : NetworkBehaviour
     {
+        /// <summary>Raised when a player's placement is committed on the server.</summary>
         public event System.Action<NetworkConnection> OnPlacementCommitted;
-        public event System.Action<int> OnPlacementTimerStarted; // seconds
+        /// <summary>Raised when the placement timer starts; payload is remaining seconds.</summary>
+        public event System.Action<int> OnPlacementTimerStarted;
+        /// <summary>Raised when the placement timer ends.</summary>
         public event System.Action OnPlacementTimerEnded;
+        /// <summary>Client-side notification that the local player is locked.</summary>
+        public event System.Action OnClientLocalLocked;
 
         [Inject] private GameSettingsSO _settings;
         [Inject] private BoardService _boardService;
@@ -37,7 +42,7 @@ namespace BattleshipsVR.Net.Services
             _gameState.OnGameStateChanged -= HandleStateChanged;
         }
 
-        /// <summary>Client sends compact fleet intent, server reconstructs masks (full set).</summary>
+        /// <summary>Client sends compact fleet intent; server reconstructs and validates a full fleet.</summary>
         [ServerRpc(RequireOwnership = false)]
         public void ClientSubmitPlacementServerRpc(FleetPlacementData data, NetworkConnection caller = null)
         {
@@ -47,7 +52,7 @@ namespace BattleshipsVR.Net.Services
             ServerCommitFleet(caller, ref fleet);
         }
 
-        /// <summary>Client sends partial; server fills the rest randomly.</summary>
+        /// <summary>Client sends partial fleet; server fills any missing ships randomly.</summary>
         [ServerRpc(RequireOwnership = false)]
         public void ClientSubmitPartialPlacementServerRpc(FleetPlacementData data, NetworkConnection caller = null)
         {
@@ -56,6 +61,37 @@ namespace BattleshipsVR.Net.Services
 
             _validator.ServerFillRandomShips(ref fleet, missing);
             ServerCommitFleet(caller, ref fleet);
+        }
+
+        /// <summary>Unified ready signal. If allowFillMissing is true, server completes missing ships randomly.</summary>
+        [ServerRpc(RequireOwnership = false)]
+        public void ClientReadyPlacementServerRpc(FleetPlacementData data, bool allowFillMissing, NetworkConnection caller = null)
+        {
+            if (caller == null) return;
+
+            if (allowFillMissing)
+            {
+                if (!_validator.ServerTryBuildFleetFromPartial(data, out var fleet, out var missing))
+                    return;
+
+                _validator.ServerFillRandomShips(ref fleet, missing);
+                ServerCommitFleet(caller, ref fleet);
+            }
+            else
+            {
+                if (!_validator.ServerTryBuildFleet(data, out var fleet))
+                    return;
+
+                ServerCommitFleet(caller, ref fleet);
+            }
+
+            NotifyLocalLockedTargetRpc(caller);
+        }
+
+        [TargetRpc]
+        private void NotifyLocalLockedTargetRpc(NetworkConnection target)
+        {
+            OnClientLocalLocked?.Invoke();
         }
 
         [Server]
@@ -101,7 +137,6 @@ namespace BattleshipsVR.Net.Services
             }
             catch (System.OperationCanceledException)
             {
-                // timer cancelled by both ready
                 NotifyPlacementTimerEndedObserversRpc();
             }
         }
@@ -109,33 +144,47 @@ namespace BattleshipsVR.Net.Services
         [Server]
         private void TryCompletePlacement(bool force = false)
         {
-            if (!_roster.HasBothPlayers && !force) return;
+            if (!_roster.HasBothPlayers)
+                return;
 
-            // For any uncommitted players, create a full random fleet so the game can start
+            if (force)
+            {
+                foreach (var conn in _roster.AllConnections)
+                {
+                    if (conn == null) continue;
+                    if (_hasCommitted.TryGetValue(conn, out bool committed) && committed)
+                        continue;
+
+                    var empty = new BoardService.FleetState();
+                    var missing = new List<byte>();
+                    foreach (var bt in _settings.BoatTypes)
+                        if (bt != null)
+                            missing.Add(bt.TypeId);
+
+                    _validator.ServerFillRandomShips(ref empty, missing);
+                    ServerCommitFleet(conn, ref empty);
+                }
+            }
+
+            int committedCount = 0;
+            foreach (var conn in _roster.AllConnections)
+                if (conn != null && _hasCommitted.TryGetValue(conn, out bool c) && c)
+                    committedCount++;
+
+            if (committedCount < 2)
+                return;
+
+            NetworkConnection first = null;
+            long bestTick = long.MaxValue;
             foreach (var conn in _roster.AllConnections)
             {
                 if (conn == null) continue;
-                if (_hasCommitted.TryGetValue(conn, out bool committed) && committed) continue;
-
-                // Build empty fleet state and fill all boats randomly.
-                var empty = new BoardService.FleetState();
-                var missing = new List<byte>();
-                foreach (var bt in _settings.BoatTypes)
-                    if (bt != null) missing.Add(bt.TypeId);
-
-                _validator.ServerFillRandomShips(ref empty, missing);
-                ServerCommitFleet(conn, ref empty);
+                if (_hasCommitted.TryGetValue(conn, out bool c) && c)
+                {
+                    long t = _commitTicks.TryGetValue(conn, out var tick) ? tick : long.MaxValue;
+                    if (t < bestTick) { bestTick = t; first = conn; }
+                }
             }
-
-            // pick order by commit timestamp when both are ready
-            List<(NetworkConnection conn, long tick)> ready = new();
-            foreach (var kvp in _hasCommitted)
-                if (kvp.Value) ready.Add((kvp.Key, _commitTicks.TryGetValue(kvp.Key, out var t) ? t : long.MaxValue));
-
-            if (ready.Count < 2 && !force) return;
-
-            ready.Sort((a, b) => a.tick.CompareTo(b.tick));
-            NetworkConnection first = ready.Count > 0 ? ready[0].conn : null;
 
             _placementCts?.Cancel();
             _placementCts?.Dispose();

@@ -5,11 +5,9 @@ using Zenject;
 /// <summary>Boat placement behaviour for drag/rotate/commit with revert-on-invalid.</summary>
 public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
 {
-    // C# events
     public event System.Action<BoatDraggable> OnPlaced;
     public event System.Action<BoatDraggable> OnUnplaced;
 
-    // Serialized inspector fields
     [SerializeField, Tooltip("Holds BoatTypeSO and identifiers for this prefab.")]
     private BoatDefinition _definition;
 
@@ -26,7 +24,6 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
     [SerializeField, Tooltip("Critical ~1.0, underdamped <1, overdamped >1.")]
     private float _magnetDamping = 0.65f;
 
-    // Public vars
     public bool IsPlaced => _isPlaced;
     public byte TypeId => _definition != null ? _definition.TypeId : (byte)0;
     public int Length => _definition != null ? _definition.Length : 0;
@@ -34,10 +31,8 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
     public int RootX => _rootX;
     public int RootY => _rootY;
 
-    // Injected
     [Inject] private ClientPlacementPlanner _planner;
 
-    // Private vars
     private bool _isPlaced;
     private bool _vertical;
     private bool _dragging;
@@ -49,18 +44,15 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
     private Vector2 _targetXZ;
     private Vector2 _velXZ;
 
-    // Previous valid placement snapshot for revert
     private bool _hadPrevPlacement;
     private int _prevRootX, _prevRootY;
     private bool _prevVertical;
     private Vector3 _prevCenterWS;
     private Quaternion _prevYaw;
 
-    // Home pose (if never placed)
     private Vector3 _homePosWS;
     private Quaternion _homeYaw;
 
-    // Unity events
     private void Awake()
     {
         _restY = transform.position.y;
@@ -86,10 +78,9 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
         transform.position = new Vector3(pos.x, transform.position.y, pos.y);
     }
 
-    // Public methods
+    /// <summary>Begins dragging: frees occupancy, snapshots previous placement, lifts model.</summary>
     public void BeginDrag()
     {
-        // Snapshot previous for possible revert
         _hadPrevPlacement = _isPlaced;
         if (_hadPrevPlacement)
         {
@@ -99,7 +90,6 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
             _prevCenterWS = _planner.GetSegmentCenterWorld(_rootX, _rootY, Length, _vertical, transform.position.y);
             _prevYaw = transform.rotation;
 
-            // Free occupancy while dragging
             _planner.SetOccupiedRect(_rootX, _rootY, Length, _vertical, false);
             _isPlaced = false;
             OnUnplaced?.Invoke(this);
@@ -110,13 +100,12 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
             _prevYaw = _homeYaw;
         }
 
-        // Lock logical orientation to current yaw relative to grid
         SyncVerticalFromTransform();
-
         _dragging = true;
         StartLift();
     }
 
+    /// <summary>Moves preview to a clamped root; reports validity and updates spring target.</summary>
     public bool PreviewAt(int rootX, int rootY, bool vertical, Vector3 segmentCenterWorld)
     {
         int gx = rootX;
@@ -125,13 +114,12 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
 
         bool fits = _planner.CanPlaceAt(gx, gy, Length, vertical);
 
-        // Move only; rotation is controlled by Q/E
         _targetXZ = new Vector2(segmentCenterWorld.x, segmentCenterWorld.z);
-
         _planner.NotifyPreviewValidity(fits);
         return fits;
     }
 
+    /// <summary>Commits placement at root and orientation; occupies grid and drops model.</summary>
     public void CommitAt(int rootX, int rootY, bool vertical, Vector3 segmentCenterWorld)
     {
         _vertical = vertical;
@@ -147,9 +135,9 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
         OnPlaced?.Invoke(this);
     }
 
+    /// <summary>Reverts to last valid placement or home pose on invalid drop.</summary>
     public void Unplace()
     {
-        // Invalid drop: revert to previous valid placement or home
         _dragging = false;
 
         if (_hadPrevPlacement)
@@ -172,6 +160,7 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
         StartDrop();
     }
 
+    /// <summary>Rotates model 90° and toggles logical orientation.</summary>
     public void RotateQuarter(int direction)
     {
         float angle = (direction >= 0) ? 90f : -90f;
@@ -188,7 +177,6 @@ public sealed class BoatDraggable : MonoBehaviour, IGridDraggable
         _vertical = Mathf.Abs(f.z) >= Mathf.Abs(f.x);
     }
 
-    // Private methods
     private void StartLift()
     {
         if (_yAnimCo != null) StopCoroutine(_yAnimCo);

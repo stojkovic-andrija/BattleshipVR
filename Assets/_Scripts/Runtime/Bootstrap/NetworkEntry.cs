@@ -9,14 +9,14 @@ using static BattleshipsVR.Bootstrap.NetConstants;
 
 namespace BattleshipsVR.Bootstrap
 {
-    /// <summary>Boots networking, exposes Host/Join API for the lobby UI, and lets UI manually start gameplay scene</summary>
+    /// <summary>Boots networking, exposes Host/Join API for the lobby UI, and lets UI manually start gameplay scene.</summary>
     public sealed class NetworkEntry : MonoBehaviour
     {
-        // C# events
-        public event System.Action<string, ushort, string> OnHostSessionReady; // bindIp, port, joinCode
+        /// <summary>Invoked when host session details are ready for sharing.</summary>
+        public event System.Action<string, ushort, string> OnHostSessionReady;
+        /// <summary>Invoked after the server transitions to Started.</summary>
         public event System.Action OnServerStarted;
 
-        // Serialized inspector fields
         [SerializeField, Tooltip("NetworkManager in this scene")]
         private NetworkManager _networkManager;
         [SerializeField, Tooltip("Transport setup strategy component")]
@@ -30,17 +30,11 @@ namespace BattleshipsVR.Bootstrap
         [SerializeField, Tooltip("Legacy fallback when no UI is present")]
         private bool _defaultToHostInEditor = true;
 
-        // Public vars
-
-        // Protected vars
-
-        // Private vars
         private bool _serverLoadedScene;
         private bool _isHost;
         private bool _clientStarted;
         private bool _sceneLoadRequested;
 
-        // Unity event methods
         private void Awake()
         {
             if (_networkManager == null)
@@ -84,9 +78,7 @@ namespace BattleshipsVR.Bootstrap
             _networkManager.ClientManager.OnClientConnectionState -= OnClientState;
         }
 
-        // Public methods
-
-        /// <summary>Start listen host and local client, compute a shareable code</summary>
+        /// <summary>Start listen host and local client, compute a shareable code.</summary>
         public void StartHost(string bindIpArg, ushort port)
         {
             _isHost = true;
@@ -103,7 +95,7 @@ namespace BattleshipsVR.Bootstrap
             _networkManager.ClientManager.StartConnection();
         }
 
-        /// <summary>Start a dedicated server</summary>
+        /// <summary>Start a dedicated server.</summary>
         public void StartServer(string bindIpArg, ushort port)
         {
             _isHost = false;
@@ -118,7 +110,7 @@ namespace BattleshipsVR.Bootstrap
             _networkManager.ServerManager.StartConnection();
         }
 
-        /// <summary>Start a client using short join code</summary>
+        /// <summary>Start a client using short join code.</summary>
         public void StartClientWithCode(string code)
         {
             if (!string.IsNullOrWhiteSpace(code) && SessionCodeCodec.TryDecode(code, out string ip, out ushort decodedPort))
@@ -135,7 +127,7 @@ namespace BattleshipsVR.Bootstrap
             _networkManager.ClientManager.StartConnection();
         }
 
-        /// <summary>Start a client using direct IP:port</summary>
+        /// <summary>Start a client using direct IP:port.</summary>
         public void StartClientDirect(string ip, ushort port)
         {
             if (string.IsNullOrWhiteSpace(ip))
@@ -149,7 +141,7 @@ namespace BattleshipsVR.Bootstrap
             _networkManager.ClientManager.StartConnection();
         }
 
-        /// <summary>Lobby clicks this to load gameplay scene</summary>
+        /// <summary>Lobby triggers this to load the gameplay scene.</summary>
         public void StartGameplay()
         {
             if (_serverLoadedScene)
@@ -166,7 +158,6 @@ namespace BattleshipsVR.Bootstrap
             ServerLoadGameplayScene();
         }
 
-        // Private methods
         private void OnServerState(ServerConnectionStateArgs args)
         {
             AppLogger.Info($"Server state changed to {args.ConnectionState}");
@@ -214,10 +205,15 @@ namespace BattleshipsVR.Bootstrap
                 return;
             }
 
-            var sld = new SceneLoadData(new string[] { sceneName });
+            var sld = new SceneLoadData(sceneName)
+            {
+                ReplaceScenes = ReplaceOption.All
+            };
+
             _networkManager.SceneManager.LoadGlobalScenes(sld);
             _serverLoadedScene = true;
-            AppLogger.Info($"Server loading gameplay scene '{sceneName}'");
+
+            AppLogger.Info($"Server replaced BootScene with gameplay scene '{sceneName}'.");
         }
 
         private NetworkRunMode ParseMode(string modeStr)

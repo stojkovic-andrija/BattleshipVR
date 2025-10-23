@@ -9,7 +9,7 @@ using BattleshipsVR.Net.Services;
 
 namespace BattleshipsVR.Dev
 {
-    /// <summary>Places fleet, waits for your turn, fires one shot, repeats until END</summary>
+    /// <summary>Places fleet, waits for your turn, fires one shot, repeats until END (Didn't work well)</summary>
     public sealed class AutoPlayerDriver : MonoBehaviour
     {
         [SerializeField] private float _thinkSeconds = 0.35f;

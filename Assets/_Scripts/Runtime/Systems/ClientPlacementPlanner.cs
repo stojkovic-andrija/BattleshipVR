@@ -5,19 +5,31 @@ using BattleshipsVR.Config;
 using BattleshipsVR.Core;
 using BattleshipsVR.Net.Data;
 
+/// <summary>
+/// Client-side planner for ship placement. Tracks occupancy, builds placement payloads,
+/// and provides helpers for grid hit-testing and world-space conversions.
+/// </summary>
 public sealed class ClientPlacementPlanner : MonoBehaviour
 {
     public event System.Action OnLocalFleetChanged;
     public event System.Action<bool> OnLocalValidityChanged;
 
-    [SerializeField] private Renderer _gridRenderer;
-    [SerializeField] private MeshFilter _gridMesh;
-    [SerializeField] private LayerMask _gridLayer;
-    [SerializeField] private List<BoatDraggable> _boats = new List<BoatDraggable>();
+    [SerializeField, Tooltip("Renderer for the grid; its transform defines the grid space.")]
+    private Renderer _gridRenderer;
+    [SerializeField, Tooltip("Mesh used to derive local bounds for grid mapping.")]
+    private MeshFilter _gridMesh;
+    [SerializeField, Tooltip("Physics layer mask used for grid raycasts.")]
+    private LayerMask _gridLayer;
+    [SerializeField, Tooltip("All draggable boats managed by this planner.")]
+    private List<BoatDraggable> _boats = new List<BoatDraggable>();
 
+    /// <summary>Transform used as the grid space reference.</summary>
     public Transform GridTransform => _gridRenderer != null ? _gridRenderer.transform : transform;
+    /// <summary>Renderer used for grid material property updates.</summary>
     public Renderer GridRenderer => _gridRenderer;
+    /// <summary>Layer mask used when raycasting onto the grid.</summary>
     public LayerMask GridLayer => _gridLayer;
+    /// <summary>Grid dimension (NxN).</summary>
     public int GridSize => _gridSize;
 
     [Inject] private GridCodec _codec;
@@ -48,6 +60,7 @@ public sealed class ClientPlacementPlanner : MonoBehaviour
         }
     }
 
+    /// <summary>Marks a consecutive segment of cells as occupied or free.</summary>
     public void SetOccupiedRect(int rootX, int rootY, int length, bool vertical, bool occupied)
     {
         for (int i = 0; i < length; i++)
@@ -60,6 +73,7 @@ public sealed class ClientPlacementPlanner : MonoBehaviour
         OnLocalFleetChanged?.Invoke();
     }
 
+    /// <summary>Checks if a ship of given length fits at the root with no overlap.</summary>
     public bool CanPlaceAt(int rootX, int rootY, int length, bool vertical)
     {
         if (vertical && (rootY + length) > _gridSize) return false;
@@ -75,6 +89,7 @@ public sealed class ClientPlacementPlanner : MonoBehaviour
         return true;
     }
 
+    /// <summary>Builds full fleet data; returns false if any boat is not placed.</summary>
     public bool TryBuildFleetData(out FleetPlacementData data)
     {
         data = default;
@@ -93,7 +108,7 @@ public sealed class ClientPlacementPlanner : MonoBehaviour
         return true;
     }
 
-    /// <summary>Serialize only the ships that are currently placed.</summary>
+    /// <summary>Builds partial fleet data containing only currently placed ships.</summary>
     public bool TryBuildPartialFleetData(out FleetPlacementData data)
     {
         data = default;
@@ -110,15 +125,25 @@ public sealed class ClientPlacementPlanner : MonoBehaviour
         return ships.Count > 0;
     }
 
-    public bool TryGetGridCellFromRay(Ray ray, out int gx, out int gy, out Vector3 hitPointWS)
+    /// <summary>Raycasts against the grid layer and resolves the hit to grid cell indices.</summary>
+    public bool TryGetGridCellFromRay(Ray ray, LayerMask layerOverride, out int gx, out int gy, out Vector3 hitPointWS)
     {
         gx = 0; gy = 0; hitPointWS = default;
-        if (!Physics.Raycast(ray, out var hit, 1000f, _gridLayer, QueryTriggerInteraction.Ignore))
+
+        LayerMask mask = (layerOverride.value != 0) ? layerOverride : _gridLayer;
+        if (!Physics.Raycast(ray, out var hit, 1000f, mask, QueryTriggerInteraction.Ignore))
             return false;
 
         hitPointWS = hit.point;
+        return TryGetGridCellFromWorld(hit.point, out gx, out gy);
+    }
 
-        Vector3 local = GridTransform.InverseTransformPoint(hit.point);
+    /// <summary>Maps a world position into grid cell coordinates.</summary>
+    public bool TryGetGridCellFromWorld(Vector3 worldPoint, out int gx, out int gy)
+    {
+        gx = 0; gy = 0;
+
+        Vector3 local = GridTransform.InverseTransformPoint(worldPoint);
         float u = Mathf.InverseLerp(_localBounds.min.x, _localBounds.max.x, local.x);
         float v = Mathf.InverseLerp(_localBounds.min.z, _localBounds.max.z, local.z);
 
@@ -127,6 +152,7 @@ public sealed class ClientPlacementPlanner : MonoBehaviour
         return true;
     }
 
+    /// <summary>Returns center world position for a ship segment defined by root, length, and orientation.</summary>
     public Vector3 GetSegmentCenterWorld(int rootX, int rootY, int length, bool vertical, float keepY)
     {
         float centerU = vertical ? (rootX + 0.5f) : (rootX + (length * 0.5f));
@@ -142,6 +168,7 @@ public sealed class ClientPlacementPlanner : MonoBehaviour
         return world;
     }
 
+    /// <summary>Builds per-cell preview indices for green (in-bounds) and red (conflict/out-of-bounds).</summary>
     public void BuildPreviewIndexLists(int rootX, int rootY, int length, bool vertical, List<int> greenOut, List<int> redOut)
     {
         greenOut.Clear();
@@ -168,5 +195,10 @@ public sealed class ClientPlacementPlanner : MonoBehaviour
         }
     }
 
-    public void NotifyPreviewValidity(bool valid) => OnLocalValidityChanged?.Invoke(valid);
+    /// <summary>Notifies listeners about current preview validity.</summary>
+    public void NotifyPreviewValidity(bool valid)
+    {
+        OnLocalValidityChanged?.Invoke(valid);
+    }
+
 }

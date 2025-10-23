@@ -1,39 +1,86 @@
 using Zenject;
 using UnityEngine;
-using FishNet.Managing;
-using BattleshipsVR.Config;
-using BattleshipsVR.Core;
 using BattleshipsVR.Net.Services;
+using BattleshipsVR.Core;
+using BattleshipsVR.Config;
+using BattleshipsVR.Interaction;
+using BattleshipsVR.Visuals;
 
 public sealed class GameplayInstaller : MonoInstaller
 {
-    [SerializeField, Tooltip("Authoritative game settings asset")]
-    private GameSettingsSO _settings;
+    /// <summary>
+    /// Binds gameplay-scene-specific systems and components.
+    /// </summary>
 
-    /// <summary>Binds config, helpers, Boot's NetworkManager, and gameplay services.</summary>
+    [SerializeField] private GameSettingsSO _settings;
+    [SerializeField] private GameStateService _gameStateService;
+    [SerializeField] private PlayerRegistryService _playerRegistryService;
+    [SerializeField] private PlacementService _placementService;
+    [SerializeField] private TurnService _turnService;
+
     public override void InstallBindings()
     {
-        // Config and helpers
-        Container.Bind<GameSettingsSO>().FromInstance(_settings).AsSingle().IfNotBound();
-        Container.Bind<GridCodec>().FromMethod(_ => new GridCodec(_settings.GridSize)).AsSingle().IfNotBound();
+        Container.Bind<GameSettingsSO>()
+            .FromInstance(_settings)
+            .AsSingle();
 
-        // Resolve the NetworkManager living in Boot (already loaded)
-        Container.Bind<NetworkManager>().FromMethod(_ =>
-            Object.FindFirstObjectByType<NetworkManager>()).AsSingle().IfNotBound();
+        Container.Bind<GridCodec>()
+            .FromMethod(_ => new GridCodec(_settings.GridSize))
+            .AsSingle();
 
-        // Core gameplay services (pure classes)
-        Container.Bind<PlayerRegistryService>().AsSingle().IfNotBound();
-        Container.Bind<BoardService>().AsSingle().IfNotBound();
-        Container.Bind<BoardValidator>().AsSingle().IfNotBound();
+        Container.Bind<BoardService>()
+            .AsSingle()
+            .IfNotBound();
 
-        // Scene network behaviours (must exist in this scene hierarchy)
-        Container.Bind<GameStateService>().FromComponentInHierarchy().AsSingle().IfNotBound();
-        Container.Bind<PlacementService>().FromComponentInHierarchy().AsSingle().IfNotBound();
-        Container.Bind<TurnService>().FromComponentInHierarchy().AsSingle().IfNotBound();
+        Container.Bind<BoardValidator>()
+            .AsSingle()
+            .IfNotBound();
 
-        // Client-side placement components that have [Inject] fields
-        Container.Bind<ClientPlacementPlanner>().FromComponentInHierarchy().AsSingle().IfNotBound();
-        Container.Bind<DesktopGridInteractor>().FromComponentInHierarchy().AsSingle().IfNotBound();
-        Container.Bind<PlacementSubmitter>().FromComponentInHierarchy().AsSingle().IfNotBound();
+        Container.Bind<GameStateService>()
+            .FromInstance(_gameStateService)
+            .AsSingle()
+            .IfNotBound();
+
+        Container.Bind<PlayerRegistryService>()
+            .FromInstance(_playerRegistryService)
+            .AsSingle()
+            .IfNotBound();
+
+        Container.Bind<PlacementService>()
+            .FromInstance(_placementService)
+            .AsSingle()
+            .IfNotBound();
+
+        Container.Bind<TurnService>()
+            .FromInstance(_turnService)
+            .AsSingle()
+            .IfNotBound();
+
+        Container.Bind<ClientPlacementPlanner>()
+            .FromComponentInHierarchy()
+            .AsSingle()
+            .IfNotBound();
+
+        Container.Bind<DesktopGridInteractor>()
+            .FromComponentInHierarchy()
+            .AsSingle()
+            .IfNotBound();
+
+        Container.Bind<PlacementSubmitter>()
+            .FromComponentInHierarchy()
+            .AsSingle()
+            .IfNotBound();
+
+        Container.BindInterfacesTo<BoardGridMapper>()
+            .FromComponentsInHierarchy()
+            .AsCached();     // IGridRayResolver, IGridWorld
+
+        Container.BindInterfacesTo<TargetVisualizer>()
+            .FromComponentsInHierarchy()
+            .AsCached();     // ITargetAimer
+
+        Container.Bind<GridOverlayMarks>()
+            .FromComponentsInHierarchy()
+            .AsCached();
     }
 }

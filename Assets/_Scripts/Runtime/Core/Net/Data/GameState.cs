@@ -5,10 +5,11 @@ namespace BattleshipsVR.Net.Data
     {
         BOOT = 0,
         LOBBY = 1,
-        PLACEMENT = 2,
-        CONFIRM = 3,
-        BATTLE = 4,
-        REVEAL = 5,
-        END = 6
+        PRE_PLACEMENT = 2,
+        PLACEMENT = 3,
+        CONFIRM = 4,
+        BATTLE = 5,
+        REVEAL = 6,
+        END = 7
     }
 }

@@ -9,22 +9,16 @@ using BattleshipsVR.Net.Data;
 
 namespace BattleshipsVR.Dev
 {
-    /// <summary>Autoplaces a valid fleet and fires scanline shots at a fixed interval so we can verify the whole skeleton without input</summary>
+    /// <summary>Autoplaces a valid fleet and fires scanline shots at a fixed interval so we can verify the whole skeleton without input (didn't work well either)</summary>
     public sealed class SmokeTestAgent : MonoBehaviour
     {
-        // Serialized inspector fields
         [SerializeField, Tooltip("Seconds between shot attempts per client")]
         private float _shotIntervalSeconds = 1.25f;
         [SerializeField, Tooltip("Enable auto placement when PLACEMENT begins")]
         private bool _autoPlace = true;
         [SerializeField, Tooltip("Enable auto fire loop after placement")]
         private bool _autoFire = true;
-
-        // Public vars
-
-        // Protected vars
-
-        // Private vars
+        
         [Inject] private GameSettingsSO _settings;
         [Inject] private GridCodec _codec;
         [Inject] private PlacementService _placement;
@@ -36,7 +30,6 @@ namespace BattleshipsVR.Dev
         private BitBoard256 _firedMask;
         private bool _running;
 
-        // Unity event methods
         private void OnEnable()
         {
             // optional in case you want to gate auto placement by state change later
@@ -53,9 +46,6 @@ namespace BattleshipsVR.Dev
             StartAsync().Forget();
         }
 
-        // Public methods
-
-        // Private methods
         private async UniTaskVoid StartAsync()
         {
             await UniTask.Delay(750); // let FishNet spawn scene objects

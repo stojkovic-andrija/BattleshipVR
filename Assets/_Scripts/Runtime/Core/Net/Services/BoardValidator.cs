@@ -5,18 +5,33 @@ using BattleshipsVR.Net.Data;
 using BattleshipsVR.Net.Services;
 using Zenject;
 
+/// <summary>
+/// Validates player fleet placements and constructs <see cref="BoardService.FleetState"/> instances.
+/// Also supports partially specified fleets and randomized filling of missing ships.
+/// </summary>
 public sealed class BoardValidator
 {
     [Inject] private GameSettingsSO _settings;
     [Inject] private GridCodec _codec;
 
+    /// <summary>
+    /// Validates and builds a complete fleet from the given placement.
+    /// </summary>
+    /// <param name="placement">Incoming placement data.</param>
+    /// <param name="fleet">Resulting built fleet when validation succeeds.</param>
+    /// <returns>True if the fleet is valid and complete; otherwise false.</returns>
     public bool ServerTryBuildFleet(FleetPlacementData placement, out BoardService.FleetState fleet)
     {
-        // original full-validate remains (omitted here for brevity)
         return ServerTryBuildFleetFromPartial(placement, out fleet, out var missing) && missing.Count == 0;
     }
 
-    /// <summary>Builds fleet from provided ships, returns which typeIds are missing.</summary>
+    /// <summary>
+    /// Builds a fleet from provided ships only, allowing for missing types.
+    /// </summary>
+    /// <param name="placement">Incoming placement data (can be partial).</param>
+    /// <param name="fleet">Partially built fleet result.</param>
+    /// <param name="missingTypeIds">Type IDs that were not provided in <paramref name="placement"/>.</param>
+    /// <returns>True if all provided ships are valid and non-overlapping; otherwise false.</returns>
     public bool ServerTryBuildFleetFromPartial(FleetPlacementData placement, out BoardService.FleetState fleet, out List<byte> missingTypeIds)
     {
         fleet = new BoardService.FleetState();
@@ -37,7 +52,7 @@ public sealed class BoardValidator
                     return false;
 
                 if (!seen.Add(sp.typeId))
-                    return false; // duplicate type
+                    return false;
 
                 _codec.Unpack(sp.rootCell, out int x, out int y);
 
@@ -62,14 +77,12 @@ public sealed class BoardValidator
             }
         }
 
-        // compute missing types
         foreach (var bt in _settings.BoatTypes)
         {
             if (bt == null) continue;
             if (!seen.Contains(bt.TypeId)) missingTypeIds.Add(bt.TypeId);
         }
 
-        // combined mask
         foreach (var s in fleet.ships)
         {
             fleet.combinedMask.x0 |= s.mask.x0;
@@ -81,7 +94,12 @@ public sealed class BoardValidator
         return true;
     }
 
-    /// <summary>Randomly fills the missing boats without overlap.</summary>
+    /// <summary>
+    /// Randomly fills any missing boats into the provided fleet without overlap.
+    /// </summary>
+    /// <param name="fleet">Fleet to add ships into.</param>
+    /// <param name="missingTypeIds">Types to place.</param>
+    /// <param name="seed">Optional RNG seed (0 = random).</param>
     public void ServerFillRandomShips(ref BoardService.FleetState fleet, List<byte> missingTypeIds, int seed = 0)
     {
         var types = new Dictionary<byte, BoatTypeSO>();
@@ -112,7 +130,7 @@ public sealed class BoardValidator
                     int cy = vertical ? y + i : y;
                     int idx = cy * _codec.GridSize + cx;
 
-                    if ((fleet.combinedMask.Get(idx)))
+                    if (fleet.combinedMask.Get(idx))
                     {
                         overlap = true;
                         break;
@@ -122,9 +140,7 @@ public sealed class BoardValidator
 
                 if (!overlap)
                 {
-                    // add to fleet and OR into combined
                     fleet.ships.Add(new BoardService.ShipState { typeId = tid, mask = shipMask, sunk = false });
-
                     fleet.combinedMask.Or(in shipMask);
                     placed = true;
                 }

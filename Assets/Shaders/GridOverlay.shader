@@ -13,6 +13,7 @@ Shader "Hidden/BSVR/GridOverlay"
         _GoodFlashHz("Good Flash Hz", Float) = 1.0
         _BadFlashHz("Bad Flash Hz",  Float) = 3.3333
 
+        [NoScaleOffset]_MarkTex("Mark Texture", 2D) = "black" {} // NEW
         [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest("ZTest", Float) = 4
     }
     SubShader
@@ -32,33 +33,25 @@ Shader "Hidden/BSVR/GridOverlay"
             #pragma fragment frag
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
-            float4 _GridScale;   // (Nx, Ny)
+            float4 _GridScale;
             float4 _GridColor;
             float  _LineWidth;
 
             float4 _GoodColor, _BadColor;
             float  _GoodAlpha, _BadAlpha, _GoodFlashHz, _BadFlashHz;
 
-            // Bounds mapping; if size ~ 0 we fallback to UVs
-            float4 _BoardMin;    // (minX, 0, minZ, 0)
-            float4 _BoardSize;   // (sizeX, 0, sizeZ, 0)
+            float4 _BoardMin;
+            float4 _BoardSize;
 
             int    _GreenCount, _RedCount;
             float  _GreenIdx[16];
             float  _RedIdx[16];
 
-            struct Attributes
-            {
-                float4 positionOS : POSITION;
-                float2 uv         : TEXCOORD0;
-            };
+            TEXTURE2D(_MarkTex);                     // NEW
+            SAMPLER(sampler_MarkTex);                // NEW
 
-            struct Varyings
-            {
-                float4 positionCS : SV_POSITION;
-                float3 posOS      : TEXCOORD0;
-                float2 uv         : TEXCOORD1;
-            };
+            struct Attributes { float4 positionOS:POSITION; float2 uv:TEXCOORD0; };
+            struct Varyings   { float4 positionCS:SV_POSITION; float3 posOS:TEXCOORD0; float2 uv:TEXCOORD1; };
 
             Varyings vert(Attributes v)
             {
@@ -89,11 +82,9 @@ Shader "Hidden/BSVR/GridOverlay"
 
             half4 frag(Varyings i) : SV_Target
             {
-                // Defensive clamp so Nx/Ny can’t be 0 if MPB wasn’t set.
                 int Nx = max(1, (int)_GridScale.x);
                 int Ny = max(1, (int)_GridScale.y);
 
-                // Choose mapping: bounds if valid, else UVs.
                 float2 uv;
                 bool useBounds = (_BoardSize.x > 1e-6) && (_BoardSize.z > 1e-6);
                 if (useBounds)
@@ -103,7 +94,7 @@ Shader "Hidden/BSVR/GridOverlay"
                 }
                 else
                 {
-                    uv = i.uv; // Plane/standard meshes have reliable UVs
+                    uv = i.uv;
                 }
 
                 float2 uvCells = uv * float2(Nx, Ny);
@@ -117,6 +108,7 @@ Shader "Hidden/BSVR/GridOverlay"
                 float dToEdge = min(min(fracUV.x, 1.0 - fracUV.x), min(fracUV.y, 1.0 - fracUV.y));
                 float lineA   = LineAA(dToEdge, _LineWidth);
 
+                // --- Placement preview (greens/reds) ---
                 bool isRed   = Listed(idx, _RedIdx, _RedCount);
                 bool isGreen = (!isRed) && Listed(idx, _GreenIdx, _GreenCount);
 
@@ -128,6 +120,16 @@ Shader "Hidden/BSVR/GridOverlay"
                 float  fillA   = 0;
                 if (isRed)   { fillCol = _BadColor;  fillA = lerp(_BadAlpha,  saturate(_BadColor.a),  badK); }
                 if (isGreen) { fillCol = _GoodColor; fillA = lerp(_GoodAlpha, saturate(_GoodColor.a), goodK); }
+
+                // --- Shot marks overlay from _MarkTex (white miss, red hit) ---
+                // Sample at continuous UV so texel per cell maps naturally.
+                float4 mark = SAMPLE_TEXTURE2D(_MarkTex, sampler_MarkTex, uv);
+                // If alpha > 0, override the preview fill with the mark color.
+                if (mark.a > 0.001)
+                {
+                    fillCol = mark;
+                    fillA   = mark.a;
+                }
 
                 float4 lineCol = _GridColor;
                 float  outA    = saturate(fillA + lineA * lineCol.a * (1.0 - fillA));

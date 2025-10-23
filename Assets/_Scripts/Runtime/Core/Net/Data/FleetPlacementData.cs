@@ -6,7 +6,7 @@ namespace BattleshipsVR.Net.Data
     [Serializable]
     public struct ShipPlacementData
     {
-        public byte typeId;    // boat type id from settings
+        public byte typeId;    
         public byte rootCell;  // packed nibble cell
         public bool vertical;  // true vertical, false horizontal
     }

@@ -5,17 +5,30 @@ using System.Threading;
 using UnityEngine;
 using Zenject;
 using BattleshipsVR.Config;
+using FishNet;
 using BattleshipsVR.Net.Data;
+using FishNet.Managing.Scened;
+using UnityEngine.SceneManagement;
+using BattleshipsVR.Bootstrap;
+using BattleshipsVR.Core;
+using static BattleshipsVR.Bootstrap.NetConstants;
+using GameKit.Dependencies.Utilities.Types;
 
 namespace BattleshipsVR.Net.Services
 {
-    /// <summary>Authoritative state machine and per turn timer without tick spam</summary>
+    /// <summary>
+    /// Authoritative game state controller with per-turn timer and synchronized scene reload.
+    /// </summary>
     public sealed class GameStateService : NetworkBehaviour
     {
-        public event System.Action<GameState> OnGameStateChanged;           // server side
-        public event System.Action<NetworkConnection, int> OnTurnStarted;   // server side
-        public event System.Action<GameState> OnClientGameStateChanged;     // client side
-        public event System.Action<int> OnLocalTurnStarted;                 // client side
+        public event System.Action<GameState> OnGameStateChanged;
+        public event System.Action<NetworkConnection, int> OnTurnStarted;
+        public event System.Action<GameState> OnClientGameStateChanged;
+        public event System.Action<int> OnLocalTurnStarted;
+        public event System.Action<bool, int> OnClientTurnBroadcast;
+
+        public int LastDefeatedClientId => _lastDefeatedClientId;
+        public NetworkConnection LastDefeatedConnection => _lastDefeatedConnection;
 
 
         [Inject] private GameSettingsSO _settings;
@@ -24,6 +37,10 @@ namespace BattleshipsVR.Net.Services
         private GameState _state = GameState.BOOT;
         private NetworkConnection _currentShooter;
         private CancellationTokenSource _turnCts;
+        private SceneId _gameScene = SceneId.GameMain;
+
+        private int _lastDefeatedClientId = -1;
+        private NetworkConnection _lastDefeatedConnection;
 
         public override void OnStartServer()
         {
@@ -39,7 +56,16 @@ namespace BattleshipsVR.Net.Services
             ServerCancelTurnTimer();
         }
 
-        /// <summary>Enters placement phase</summary>
+        /// <summary>Transition to PRE_PLACEMENT.</summary>
+        [Server]
+        public void ServerBeginPreplacement()
+        {
+            _state = GameState.PRE_PLACEMENT;
+            OnGameStateChanged?.Invoke(_state);
+            NotifyStateChangedObserversRpc(_state);
+        }
+
+        /// <summary>Transition to PLACEMENT.</summary>
         [Server]
         public void ServerBeginPlacement()
         {
@@ -48,7 +74,7 @@ namespace BattleshipsVR.Net.Services
             NotifyStateChangedObserversRpc(_state);
         }
 
-        /// <summary>Optional confirm step if you want a short lock in</summary>
+        /// <summary>Transition to CONFIRM.</summary>
         [Server]
         public void ServerEnterConfirm()
         {
@@ -57,25 +83,26 @@ namespace BattleshipsVR.Net.Services
             NotifyStateChangedObserversRpc(_state);
         }
 
-        /// <summary>Starts battle and first turn</summary>
+        /// <summary>Transition to BATTLE and start first shooter's turn.</summary>
         [Server]
         public void ServerBeginBattle(NetworkConnection firstShooter)
         {
             _state = GameState.BATTLE;
             _currentShooter = firstShooter;
+
             OnGameStateChanged?.Invoke(_state);
             NotifyStateChangedObserversRpc(_state);
             ServerStartTurn(_currentShooter);
         }
 
-        /// <summary>Returns true if caller is allowed to shoot now</summary>
+        /// <summary>Checks if the given connection is the current shooter.</summary>
         [Server]
-        public bool ServerIsCurrentShooter(NetworkConnection c)
+        public bool ServerIsCurrentShooter(NetworkConnection connection)
         {
-            return c == _currentShooter;
+            return connection == _currentShooter;
         }
 
-        /// <summary>Advances to next shooter and restarts timer</summary>
+        /// <summary>Advance turn to the specified next shooter.</summary>
         [Server]
         public void ServerAdvanceTurn(NetworkConnection nextShooter)
         {
@@ -84,22 +111,49 @@ namespace BattleshipsVR.Net.Services
             ServerStartTurn(_currentShooter);
         }
 
-        /// <summary>Enters reveal phase</summary>
+        /// <summary>Called by TurnService when a fleet is defeated; enters REVEAL and schedules END.</summary>
         [Server]
-        public void ServerEnterReveal()
+        public void ServerHandleBattleConcluded()
         {
+            ServerCancelTurnTimer();
+
             _state = GameState.REVEAL;
             OnGameStateChanged?.Invoke(_state);
             NotifyStateChangedObserversRpc(_state);
+
+            int revealSeconds = _settings.RevealSeconds > 0 ? _settings.RevealSeconds : 3;
+            ServerAdvanceToEndAfterDelayAsync(revealSeconds).Forget();
         }
 
-        /// <summary>Final end state after reveal</summary>
+        /// <summary>Transition to END.</summary>
         [Server]
         public void ServerEnterEnd()
         {
             _state = GameState.END;
             OnGameStateChanged?.Invoke(_state);
             NotifyStateChangedObserversRpc(_state);
+        }
+
+        /// <summary>Registers the last defeated player for UI/summary screens.</summary>
+        [Server]
+        public void ServerRegisterDefeat(NetworkConnection defeated)
+        {
+            _lastDefeatedConnection = defeated;
+            _lastDefeatedClientId = defeated != null ? defeated.ClientId : -1;
+            NotifyDefeatObserversRpc(_lastDefeatedClientId);
+        }
+
+        /// <summary>Client helper for restart button in EndResultUI.</summary>
+        [Client]
+        public void ClientRequestRestart()
+        {
+            ClientRequestRestartServerRpc();
+        }
+
+        [ObserversRpc(BufferLast = true)]
+        private void NotifyDefeatObserversRpc(int defeatedClientId)
+        {
+            _lastDefeatedClientId = defeatedClientId;
         }
 
         [Server]
@@ -112,8 +166,13 @@ namespace BattleshipsVR.Net.Services
         private void ServerStartTurn(NetworkConnection shooter)
         {
             int seconds = Mathf.Max(5, _settings.TurnSeconds);
+
             OnTurnStarted?.Invoke(shooter, seconds);
-            NotifyTurnStartTargetRpc(shooter, seconds); // only shooter gets this
+            NotifyTurnStartTargetRpc(shooter, seconds);
+
+            int shooterId = shooter != null ? shooter.ClientId : -1;
+            NotifyTurnStartedObserversRpc(shooterId, seconds);
+
             _turnCts = new CancellationTokenSource();
             ServerTurnTimeoutAsync(shooter, seconds, _turnCts.Token).Forget();
         }
@@ -133,12 +192,52 @@ namespace BattleshipsVR.Net.Services
             {
                 await UniTask.Delay(seconds * 1000, cancellationToken: ct);
                 NetworkConnection next = _roster.GetOpponent(shooter);
-                ServerAdvanceTurn(next);
+                if (_state == GameState.BATTLE)
+                    ServerAdvanceTurn(next);
             }
             catch (System.OperationCanceledException)
             {
-                // timer was canceled by a valid shot
+                // Turn timer cancelled by a valid shot or match end.
             }
+        }
+
+        [Server]
+        private async UniTaskVoid ServerAdvanceToEndAfterDelayAsync(int seconds)
+        {
+            await UniTask.Delay(seconds * 1000);
+            if (_state == GameState.REVEAL)
+                ServerEnterEnd();
+        }
+
+        /// <summary>Server reloads the current gameplay scene globally for all clients.</summary>
+        [Server]
+        private void ServerRestartMatch()
+        {
+            ServerCancelTurnTimer();
+
+            string sceneName = ResolveSceneName(_gameScene);
+
+            SceneLoadData sld = new SceneLoadData("EmptyScene");
+            sld.ReplaceScenes = ReplaceOption.All;
+            NetworkManager.SceneManager.LoadGlobalScenes(sld);
+
+            sld = new SceneLoadData(sceneName)
+            {
+                ReplaceScenes = ReplaceOption.All
+            };
+
+            InstanceFinder.SceneManager.LoadGlobalScenes(sld);
+        }
+
+        /// <summary>Client asks the server to restart the match.</summary>
+        [ServerRpc(RequireOwnership = false)]
+        private void ClientRequestRestartServerRpc(NetworkConnection caller = null)
+        {
+            if (_state != GameState.END)
+                return;
+
+            AppLogger.Info($"[GameStateService] Restart requested by client {caller.ClientId}");
+            ServerRestartMatch();
         }
 
         [ObserversRpc(BufferLast = true)]
@@ -151,6 +250,14 @@ namespace BattleshipsVR.Net.Services
         private void NotifyTurnStartTargetRpc(NetworkConnection target, int seconds)
         {
             OnLocalTurnStarted?.Invoke(seconds);
+        }
+
+        [ObserversRpc(BufferLast = false)]
+        private void NotifyTurnStartedObserversRpc(int shooterClientId, int seconds)
+        {
+            var myConn = InstanceFinder.ClientManager?.Connection;
+            bool isLocal = myConn != null && myConn.ClientId == shooterClientId;
+            OnClientTurnBroadcast?.Invoke(isLocal, seconds);
         }
     }
 }

@@ -14,7 +14,7 @@ namespace BattleshipsVR.Bootstrap
         public const string ARG_PORT = "-port=";
         public const string ARG_SCENE = "-scene=";
 
-        public const ushort DEFAULT_PORT = 7777;
+        public const ushort DEFAULT_PORT = 7770;
         public const string DEFAULT_LOCAL_IP = "127.0.0.1";
 
         /// <summary>Maps scene id to asset name for load calls</summary>

@@ -2,187 +2,612 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using Zenject;
+using BattleshipsVR.Core;
+using BattleshipsVR.Net.Data;
+using BattleshipsVR.Net.Services;
+using BattleshipsVR.Interaction.Abstractions;
+using BattleshipsVR.Visuals;
+using BattleshipsVR.Audio;
 
-public sealed class DesktopGridInteractor : MonoBehaviour
+namespace BattleshipsVR.Interaction
 {
-    [SerializeField] private Camera _camera;
-    [Inject] private ClientPlacementPlanner _planner;
-
-    private InputActionMap _map;
-    private InputAction _point, _click, _rotateCW, _rotateCCW;
-
-    private IGridDraggable _active;
-    private bool _previewVertical;
-    private bool _hasValidPreview;
-    private int _previewRootX, _previewRootY;
-
-    private readonly List<int> _greens = new List<int>(16);
-    private readonly List<int> _reds = new List<int>(16);
-    private readonly float[] _greenFloats = new float[16];
-    private readonly float[] _redFloats = new float[16];
-    private MaterialPropertyBlock _mpb;
-
-    private void Awake()
+    /// <summary>
+    /// Desktop interactor for placement and battle phases: picks/places ships with mouse and fires shots on the opponent grid.
+    /// Uses the new Input System and mirrors indices to map attacker coordinates into defender space.
+    /// </summary>
+    public sealed class DesktopGridInteractor : MonoBehaviour
     {
-        _map = new InputActionMap("Placement");
-        _point     = _map.AddAction("Point",       InputActionType.Value,  "<Mouse>/position");
-        _click     = _map.AddAction("Click",       InputActionType.Button, "<Mouse>/leftButton");
-        _rotateCW  = _map.AddAction("RotateCW",    InputActionType.Button, "<Keyboard>/e");
-        _rotateCCW = _map.AddAction("RotateCCW",   InputActionType.Button, "<Keyboard>/q");
+        [SerializeField] private Camera _camera;
 
-        _click.performed += OnClickPerformed;
-        _click.canceled  += OnClickCanceled;
-        _rotateCW.performed += OnRotateCW;
-        _rotateCCW.performed += OnRotateCCW;
+        [Header("Input (optional)")]
+        [SerializeField] private InputActionReference _pointerAction;
+        [SerializeField] private InputActionReference _primaryAction;
+        [SerializeField] private InputActionReference _secondaryAction;
+        [SerializeField] private InputActionReference _rotateCWAction;
+        [SerializeField] private InputActionReference _rotateCCWAction;
 
-        _map.Enable();
-        _mpb = new MaterialPropertyBlock();
+        [Header("Battle Mapping")]
+        [SerializeField] private LayerMask _placementGridMask;
+        [SerializeField] private LayerMask _opponentGridMask;
+        [SerializeField, Tooltip("BoardGridMapper (IGridRayResolver)")]
+        private MonoBehaviour _opponentResolverBehaviour;
+        [SerializeField, Tooltip("BoardGridMapper (IGridWorld)")]
+        private MonoBehaviour _myGridWorldBehaviour;
+        [SerializeField, Tooltip("BoardGridMapper (IGridWorld)")]
+        private MonoBehaviour _opponentGridWorldBehaviour;
 
-        var r = _planner.GridRenderer;
-        r.GetPropertyBlock(_mpb);
-        _mpb.SetVector("_GridScale", new Vector4(_planner.GridSize, _planner.GridSize, 0f, 0f));
-        r.SetPropertyBlock(_mpb);
-    }
+        [Header("Battle Visuals")]
+        [SerializeField, Tooltip("TargetVisualizer implementing ITargetAimer")]
+        private MonoBehaviour _opponentTargetBehaviour;
+        [SerializeField, Tooltip("TargetVisualizer implementing ITargetAimer")]
+        private MonoBehaviour _baseTargetBehaviour;
+        [SerializeField] private GridOverlayMarks _myGridMarks;
+        [SerializeField] private GridOverlayMarks _opponentGridMarks;
 
-    private void OnDestroy()
-    {
-        _click.performed -= OnClickPerformed;
-        _click.canceled  -= OnClickCanceled;
-        _rotateCW.performed -= OnRotateCW;
-        _rotateCCW.performed -= OnRotateCCW;
-        _map.Disable();
-    }
+        [Header("Debug")]
+        [SerializeField] private bool _verboseLogs = true;
 
-    private void Update()
-    {
-        if (_active != null)
+        [Inject] private ClientPlacementPlanner _planner;
+        [Inject] private GridCodec _codec;
+        [Inject] private GameStateService _gameState;
+        [Inject] private TurnService _turns;
+        [Inject] private AudioManager _audioManager;
+
+        private IGridRayResolver _opponentResolver;
+        private IGridWorld _myGridWorld;
+        private IGridWorld _opponentGridWorld;
+        private ITargetAimer _opponentTarget;
+        private ITargetAimer _baseTarget;
+
+        private IGridDraggable _active;
+        private bool _previewVertical;
+        private bool _hasValidPreview;
+        private bool _lastPreviewValidLogged;
+        private int _previewRootX, _previewRootY;
+
+        private bool _isPlacement;
+        private bool _isBattle;
+        private bool _canShoot;
+        private bool _launchedThisTurn;
+        private int _hoverCell = -1;
+        private BitBoard256 _triedOpponentCells;
+
+        private readonly List<int> _greens = new List<int>(16);
+        private readonly List<int> _reds = new List<int>(16);
+        private readonly float[] _greenFloats = new float[16];
+        private readonly float[] _redFloats = new float[16];
+        private MaterialPropertyBlock _mpb;
+
+        private int _lastLoggedHoverCell = -2;
+        private bool _loggedAwaitingOpponent;
+
+        private void OnValidate()
         {
-            Ray ray = _camera.ScreenPointToRay(_point.ReadValue<Vector2>());
-            if (_planner.TryGetGridCellFromRay(ray, out int gx, out int gy, out _))
+            if (_opponentTargetBehaviour != null && !(_opponentTargetBehaviour is ITargetAimer))
+                Debug.LogError("[DesktopGridInteractor] Opponent Target Behaviour must implement ITargetAimer (TargetVisualizer).", this);
+
+            if (_baseTargetBehaviour != null && !(_baseTargetBehaviour is ITargetAimer))
+                Debug.LogError("[DesktopGridInteractor] Base Target Behaviour must implement ITargetAimer (TargetVisualizer).", this);
+
+            if (_myGridWorldBehaviour != null && !(_myGridWorldBehaviour is IGridWorld))
+                Debug.LogError("[DesktopGridInteractor] My Grid World Behaviour must implement IGridWorld.", this);
+
+            if (_opponentGridWorldBehaviour != null && !(_opponentGridWorldBehaviour is IGridWorld))
+                Debug.LogError("[DesktopGridInteractor] Opponent Grid World Behaviour must implement IGridWorld.", this);
+
+            if (_opponentResolverBehaviour != null && !(_opponentResolverBehaviour is IGridRayResolver))
+                Debug.LogError("[DesktopGridInteractor] Opponent Resolver Behaviour must implement IGridRayResolver (BoardGridMapper).", this);
+        }
+
+        private void Awake()
+        {
+            _camera = Camera.main;
+
+            _opponentResolver = _opponentResolverBehaviour as IGridRayResolver;
+            _myGridWorld = _myGridWorldBehaviour as IGridWorld;
+            _opponentGridWorld = _opponentGridWorldBehaviour as IGridWorld;
+            _opponentTarget = _opponentTargetBehaviour as ITargetAimer;
+            _baseTarget = _baseTargetBehaviour as ITargetAimer;
+
+            _mpb = new MaterialPropertyBlock();
+            if (_planner != null && _planner.GridRenderer != null)
             {
-                (int rx, int ry) = ComputeCenteredRoot(gx, gy, _active.Length, _previewVertical, _planner.GridSize);
-                _previewRootX = rx;
-                _previewRootY = ry;
+                _planner.GridRenderer.GetPropertyBlock(_mpb);
+                _mpb.SetVector("_GridScale", new Vector4(_planner.GridSize, _planner.GridSize, 0f, 0f));
+                _planner.GridRenderer.SetPropertyBlock(_mpb);
+            }
 
-                Vector3 segCenter = _planner.GetSegmentCenterWorld(_previewRootX, _previewRootY, _active.Length, _previewVertical, GetActiveY());
-                _hasValidPreview = _active.PreviewAt(_previewRootX, _previewRootY, _previewVertical, segCenter);
+            Log("Awake");
+        }
 
-                _planner.BuildPreviewIndexLists(_previewRootX, _previewRootY, _active.Length, _previewVertical, _greens, _reds);
-                PushOverlayArrays(_planner.GridRenderer, _greens, _reds);
+        private void OnEnable()
+        {
+            _pointerAction?.action?.Enable();
+            _primaryAction?.action?.Enable();
+            _secondaryAction?.action?.Enable();
+            _rotateCWAction?.action?.Enable();
+            _rotateCCWAction?.action?.Enable();
+
+            _gameState.OnClientGameStateChanged += HandleStateChanged;
+            _gameState.OnLocalTurnStarted += HandleLocalTurnStarted;
+            _gameState.OnClientTurnBroadcast += HandleTurnBroadcast;
+            _turns.OnClientShotResult += HandleShotResult;
+
+            Log("OnEnable");
+        }
+
+        private void OnDisable()
+        {
+            _pointerAction?.action?.Disable();
+            _primaryAction?.action?.Disable();
+            _secondaryAction?.action?.Disable();
+            _rotateCWAction?.action?.Disable();
+            _rotateCCWAction?.action?.Disable();
+
+            _gameState.OnClientGameStateChanged -= HandleStateChanged;
+            _gameState.OnLocalTurnStarted -= HandleLocalTurnStarted;
+            _gameState.OnClientTurnBroadcast -= HandleTurnBroadcast;
+            _turns.OnClientShotResult -= HandleShotResult;
+
+            Log("OnDisable");
+        }
+
+        private void Update()
+        {
+            if (_camera == null) return;
+
+            if (_isPlacement) TickPlacement();
+            else if (_isBattle) TickBattle();
+        }
+
+        /// <summary>Sets the layer mask used for placement raycasts.</summary>
+        public void SetPlacementMask(LayerMask mask)
+        {
+            _placementGridMask = mask;
+        }
+
+        private void TickPlacement()
+        {
+            if (_active != null)
+            {
+                Vector2 p = ReadPointer();
+                Ray ray = _camera.ScreenPointToRay(p);
+
+                if (_planner.TryGetGridCellFromRay(ray, _placementGridMask, out int gx, out int gy, out _))
+                {
+                    (int rx, int ry) = ComputeCenteredRoot(gx, gy, _active.Length, _previewVertical, _planner.GridSize);
+                    _previewRootX = rx;
+                    _previewRootY = ry;
+
+                    Vector3 segCenter = _planner.GetSegmentCenterWorld(_previewRootX, _previewRootY, _active.Length, _previewVertical, GetActiveY());
+                    bool wasValid = _hasValidPreview;
+                    _hasValidPreview = _active.PreviewAt(_previewRootX, _previewRootY, _previewVertical, segCenter);
+
+                    if (wasValid != _hasValidPreview || !_lastPreviewValidLogged)
+                    {
+                        Log(_hasValidPreview
+                            ? $"Placement preview VALID at ({_previewRootX},{_previewRootY}) vertical={_previewVertical}"
+                            : $"Placement preview INVALID at ({_previewRootX},{_previewRootY}) vertical={_previewVertical}");
+                        _lastPreviewValidLogged = true;
+                    }
+
+                    _planner.BuildPreviewIndexLists(_previewRootX, _previewRootY, _active.Length, _previewVertical, _greens, _reds);
+                    PushOverlayArrays(_planner.GridRenderer, _greens, _reds);
+                }
+
+                if (RotateCWPressed())
+                {
+                    _previewVertical = !_previewVertical;
+                    if (_active is BoatDraggable b1) b1.RotateQuarter(+1);
+                    _audioManager.PlayWithRandomPitch(AudioManager.AudioType.RotateTick, .7f, 1.3f);
+                    Log($"Rotate CW, vertical={_previewVertical}");
+                }
+
+                if (RotateCCWPressed())
+                {
+                    _previewVertical = !_previewVertical;
+                    if (_active is BoatDraggable b2) b2.RotateQuarter(-1);
+                    _audioManager.PlayWithRandomPitch(AudioManager.AudioType.RotateTick, .7f, 1.3f);
+                    Log($"Rotate CCW, vertical={_previewVertical}");
+                }
+
+                if (PrimaryReleased())
+                {
+                    Vector3 segCenter = _planner.GetSegmentCenterWorld(_previewRootX, _previewRootY, _active.Length, _previewVertical, GetActiveY());
+                    if (_hasValidPreview)
+                    {
+                        _active.CommitAt(_previewRootX, _previewRootY, _previewVertical, segCenter);
+                        _audioManager.PlayRandom(.8f, 1.2f, AudioManager.AudioType.BoatPlace, AudioManager.AudioType.BoatPlacement2);
+                        Log($"Placed at ({_previewRootX},{_previewRootY}) vertical={_previewVertical}");
+                    }
+                    else
+                    {
+                        _active.Unplace();
+                        _audioManager.PlayWithSpecificPitch(AudioManager.AudioType.PlacementError, 1f);
+                        Log("Unplaced (invalid preview on release)");
+                    }
+
+                    _active = null;
+                    ClearOverlayArrays(_planner.GridRenderer);
+                    _lastPreviewValidLogged = false;
+                }
+            }
+            else
+            {
+                if (PrimaryPressed())
+                {
+                    if (TryPickUnderCursor())
+                    {
+                        Log("Picked draggable");
+                        _audioManager.PlayWithSpecificPitch(AudioManager.AudioType.StoneFall, 2f);
+                    }
+                    else
+                    {
+                        Log("Pick failed (no draggable under cursor)");
+                    }
+                }
             }
         }
-        else
+
+        private bool TryPickUnderCursor()
         {
-            if (Mouse.current.leftButton.wasPressedThisFrame)
-                TryPickUnderCursor();
-            ClearOverlayArrays(_planner.GridRenderer);
-        }
-    }
-
-    private void OnClickPerformed(InputAction.CallbackContext ctx)
-    {
-        if (_active == null)
-            TryPickUnderCursor();
-    }
-
-    private void OnClickCanceled(InputAction.CallbackContext ctx)
-    {
-        if (_active == null) return;
-
-        Vector3 segCenter = _planner.GetSegmentCenterWorld(_previewRootX, _previewRootY, _active.Length, _previewVertical, GetActiveY());
-
-        if (_hasValidPreview)
-            _active.CommitAt(_previewRootX, _previewRootY, _previewVertical, segCenter);
-        else
-            _active.Unplace();
-
-        _active = null;
-        ClearOverlayArrays(_planner.GridRenderer);
-    }
-
-    private void OnRotateCW(InputAction.CallbackContext ctx)
-    {
-        if (_active == null) return;
-        _previewVertical = !_previewVertical;
-        if (_active is BoatDraggable b) b.RotateQuarter(+1);
-    }
-
-    private void OnRotateCCW(InputAction.CallbackContext ctx)
-    {
-        if (_active == null) return;
-        _previewVertical = !_previewVertical;
-        if (_active is BoatDraggable b) b.RotateQuarter(-1);
-    }
-
-    private bool TryPickUnderCursor()
-    {
-        Ray ray = _camera.ScreenPointToRay(_point.ReadValue<Vector2>());
-        if (Physics.Raycast(ray, out var hit, 1000f, ~0, QueryTriggerInteraction.Ignore))
-        {
-            if (hit.collider.TryGetComponent<IGridDraggable>(out var drag))
+            Vector2 p = ReadPointer();
+            Ray ray = _camera.ScreenPointToRay(p);
+            if (Physics.Raycast(ray, out var hit, 1000f, ~0, QueryTriggerInteraction.Ignore))
             {
-                _active = drag;
-
-                if (_active is BoatDraggable b)
+                if (hit.collider.TryGetComponent<IGridDraggable>(out var drag))
                 {
-                    b.SyncVerticalFromTransform();       // read actual yaw relative to grid
-                    _previewVertical = b.Vertical;       // use that for highlight immediately
+                    _active = drag;
+
+                    if (_active is BoatDraggable b)
+                    {
+                        b.SyncVerticalFromTransform();
+                        _previewVertical = b.Vertical;
+                    }
+                    else
+                    {
+                        _previewVertical = false;
+                    }
+
+                    _active.BeginDrag();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private float GetActiveY()
+        {
+            if (_active is BoatDraggable b) return b.transform.position.y;
+            return _planner.GridTransform.position.y;
+        }
+
+        private static (int rx, int ry) ComputeCenteredRoot(int hitX, int hitY, int length, bool vertical, int gridSize)
+        {
+            int offset = (length % 2 == 0) ? (length / 2 - 1) : (length / 2);
+            int rx = vertical ? hitX : (hitX - offset);
+            int ry = vertical ? (hitY - offset) : hitY;
+            GridMath.ClampRootForLength(ref rx, ref ry, length, gridSize, vertical);
+            return (rx, ry);
+        }
+
+        private void PushOverlayArrays(Renderer target, List<int> greens, List<int> reds)
+        {
+            if (target == null) return;
+
+            int gCount = Mathf.Min(greens.Count, 16);
+            int rCount = Mathf.Min(reds.Count, 16);
+
+            for (int i = 0; i < gCount; i++) _greenFloats[i] = greens[i];
+            for (int i = gCount; i < 16; i++) _greenFloats[i] = 0f;
+            for (int i = 0; i < rCount; i++) _redFloats[i] = reds[i];
+            for (int i = rCount; i < 16; i++) _redFloats[i] = 0f;
+
+            if (_mpb == null) _mpb = new MaterialPropertyBlock();
+            target.GetPropertyBlock(_mpb);
+            _mpb.SetInt("_GreenCount", gCount);
+            _mpb.SetInt("_RedCount", rCount);
+            _mpb.SetFloatArray("_GreenIdx", _greenFloats);
+            _mpb.SetFloatArray("_RedIdx", _redFloats);
+            target.SetPropertyBlock(_mpb);
+        }
+
+        private void ClearOverlayArrays(Renderer target)
+        {
+            if (target == null) return;
+            if (_mpb == null) _mpb = new MaterialPropertyBlock();
+            target.GetPropertyBlock(_mpb);
+            _mpb.SetInt("_GreenCount", 0);
+            _mpb.SetInt("_RedCount", 0);
+            target.SetPropertyBlock(_mpb);
+        }
+
+        private void TickBattle()
+        {
+            if (!_canShoot)
+            {
+                if (!_loggedAwaitingOpponent)
+                {
+                    Log("Awaiting opponent turn");
+                    _loggedAwaitingOpponent = true;
+                }
+                return;
+            }
+
+            if (_opponentTarget == null || _opponentGridWorld == null)
+                return;
+
+            if (_opponentResolver == null)
+            {
+                Log("Opponent resolver is null; cannot resolve opponent cells.");
+                return;
+            }
+
+            if (!_opponentTarget.IsLocked)
+            {
+                Vector2 p = ReadPointer();
+                Ray ray = _camera.ScreenPointToRay(p);
+
+                if (TryGetOpponentCellFromRay(ray, out int cell, out Vector3 center))
+                {
+                    _hoverCell = cell;
+                    if (_hoverCell != _lastLoggedHoverCell)
+                    {
+                        Log($"Battle hover cell={_hoverCell}");
+                        _audioManager.PlayWithRandomPitch(AudioManager.AudioType.HoverTick, .8f, 1.2f);
+                        _lastLoggedHoverCell = _hoverCell;
+                    }
+
+                    _opponentTarget.ShowHover(center, _hoverCell);
+
+                    if (PrimaryPressed())
+                    {
+                        if (_triedOpponentCells.Get(cell))
+                        {
+                            Log($"Cell {_hoverCell} already tried");
+                            return;
+                        }
+
+                        _opponentTarget.Lock();
+                        _audioManager.PlayWithSpecificPitch(AudioManager.AudioType.MissileLockIn, 1f);
+                        Log($"Locked on cell={_hoverCell}");
+                    }
                 }
                 else
                 {
-                    _previewVertical = false;
+                    _hoverCell = -1;
+                }
+            }
+            else
+            {
+                if (SecondaryPressed())
+                {
+                    _opponentTarget.Cancel();
+                    _audioManager.PlayWithSpecificPitch(AudioManager.AudioType.RotateTick, 1f);
+                    Log("Lock canceled");
+                    return;
                 }
 
-                _active.BeginDrag();
-                return true;
+                if (PrimaryPressed() && !_launchedThisTurn)
+                {
+                    int cell = _opponentTarget.LockedCellIndex >= 0 ? _opponentTarget.LockedCellIndex : _hoverCell;
+                    if (cell < 0) return;
+                    if (_triedOpponentCells.Get(cell)) return;
+
+                    _launchedThisTurn = true;
+                    _canShoot = false;
+                    _triedOpponentCells.Set(cell);
+
+                    _opponentTarget.Launch();
+
+                    int gx = cell % _codec.GridSize;
+                    int gy = cell / _codec.GridSize;
+                    Log($"Launch shot at idx={cell} (gx={gx}, gy={gy})");
+                    _turns.ClientRequestShotServerRpc(_codec.Pack(gx, gy));
+                    _audioManager.PlayWithRandomPitch(AudioManager.AudioType.MissileFall, .9f, 1.5f);
+                }
             }
         }
-        return false;
-    }
 
-    private float GetActiveY()
-    {
-        if (_active is BoatDraggable b) return b.transform.position.y;
-        return _planner.GridTransform.position.y;
-    }
+        private bool TryGetOpponentCellFromRay(Ray ray, out int cellIndex, out Vector3 centerWorld)
+        {
+            cellIndex = -1;
+            centerWorld = default;
 
-    private static (int rx, int ry) ComputeCenteredRoot(int hitX, int hitY, int length, bool vertical, int gridSize)
-    {
-        int offset = (length % 2 == 0) ? (length / 2 - 1) : (length / 2);
-        int rx = vertical ? hitX : (hitX - offset);
-        int ry = vertical ? (hitY - offset) : hitY;
-        GridMath.ClampRootForLength(ref rx, ref ry, length, gridSize, vertical);
-        return (rx, ry);
-    }
+            if (!Physics.Raycast(ray, out RaycastHit hit, 1000f, _opponentGridMask, QueryTriggerInteraction.Collide))
+                return false;
 
-    private void PushOverlayArrays(Renderer target, List<int> greens, List<int> reds)
-    {
-        if (target == null) return;
+            if (_opponentResolver.TryResolve(hit, out int resolvedCell, out Vector3 resolvedCenter))
+            {
+                cellIndex = resolvedCell;
+                centerWorld = resolvedCenter;
+                return true;
+            }
 
-        int gCount = Mathf.Min(greens.Count, 16);
-        int rCount = Mathf.Min(reds.Count, 16);
+            return false;
+        }
 
-        for (int i = 0; i < gCount; i++) _greenFloats[i] = greens[i];
-        for (int i = gCount; i < 16; i++) _greenFloats[i] = 0f;
-        for (int i = 0; i < rCount; i++) _redFloats[i] = reds[i];
-        for (int i = rCount; i < 16; i++) _redFloats[i] = 0f;
+        private void HandleTurnBroadcast(bool isLocalShooter, int seconds)
+        {
+            _isBattle = true;
+            _canShoot = isLocalShooter;
+            _launchedThisTurn = false;
+            _loggedAwaitingOpponent = !isLocalShooter;
+        }
 
-        if (_mpb == null) _mpb = new MaterialPropertyBlock();
-        target.GetPropertyBlock(_mpb);
-        _mpb.SetInt("_GreenCount", gCount);
-        _mpb.SetInt("_RedCount", rCount);
-        _mpb.SetFloatArray("_GreenIdx", _greenFloats);
-        _mpb.SetFloatArray("_RedIdx", _redFloats);
-        target.SetPropertyBlock(_mpb);
-    }
+        private void HandleLocalTurnStarted(int seconds)
+        {
+            _isBattle = true;
+            _canShoot = true;
+            _launchedThisTurn = false;
+            _loggedAwaitingOpponent = false;
+            Log($"Local turn started ({seconds}s)");
+        }
 
-    private void ClearOverlayArrays(Renderer target)
-    {
-        if (target == null) return;
-        if (_mpb == null) _mpb = new MaterialPropertyBlock();
-        target.GetPropertyBlock(_mpb);
-        _mpb.SetInt("_GreenCount", 0);
-        _mpb.SetInt("_RedCount", 0);
-        target.SetPropertyBlock(_mpb);
+        private void HandleStateChanged(GameState state)
+        {
+            bool wasPlacement = _isPlacement;
+            bool wasBattle = _isBattle;
+
+            _isPlacement = state == GameState.PLACEMENT || state == GameState.PRE_PLACEMENT || state == GameState.CONFIRM;
+            _isBattle = state == GameState.BATTLE;
+
+            if (_isPlacement && !wasPlacement) Log("Enter PLACEMENT");
+            if (!_isPlacement && wasPlacement) Log("Exit PLACEMENT");
+
+            if (_isBattle && !wasBattle) Log("Enter BATTLE");
+            if (!_isBattle && wasBattle) Log("Exit BATTLE");
+
+            if (!_isPlacement)
+            {
+                if (_active != null)
+                {
+                    _active.Unplace();
+                    _active = null;
+                    Log("Placement canceled on state change");
+                }
+                ClearOverlayArrays(_planner != null ? _planner.GridRenderer : null);
+                _lastPreviewValidLogged = false;
+            }
+
+            if (!_isBattle)
+            {
+                _canShoot = false;
+                _launchedThisTurn = false;
+                _opponentTarget?.HideAll();
+                _baseTarget?.HideAll();
+                _lastLoggedHoverCell = -2;
+                _loggedAwaitingOpponent = false;
+            }
+
+            if (state == GameState.REVEAL || state == GameState.END)
+            {
+                _triedOpponentCells = default;
+                _opponentTarget?.HideAll();
+                _baseTarget?.HideAll();
+            }
+        }
+
+        private void HandleShotResult(byte packedCell, bool isHit, bool isSunk, byte sunkTypeId, bool isLocalShooter)
+        {
+            int idx = _codec.ToIndex(packedCell);
+            int gx = idx % _codec.GridSize;
+            int gy = idx / _codec.GridSize;
+
+            if (isLocalShooter)
+            {
+                _opponentTarget?.ApplyResult(isHit);
+
+                if (_opponentGridMarks != null)
+                {
+                    if (isHit)
+                    {
+                        _opponentGridMarks.MarkHit(idx);
+                        _audioManager.PlayRandom(.8f, 1.2f,
+                            AudioManager.AudioType.Explosion,
+                            AudioManager.AudioType.BigExplosion,
+                            AudioManager.AudioType.HugeExplosion,
+                            AudioManager.AudioType.LargeExplosion
+                        );
+                    }
+                    else
+                    {
+                        _opponentGridMarks.MarkMiss(idx);
+                        _audioManager.PlayRandom(.8f, 1.2f,
+                            AudioManager.AudioType.BoatPlace,
+                            AudioManager.AudioType.BoatPlacement2
+                        );
+                    }
+                }
+
+                Log($"Shot result (SHOOTER local coords): idx={idx} hit={isHit} sunk={isSunk} type={sunkTypeId}");
+            }
+            else
+            {
+                int flippedX = (_codec.GridSize - 1) - gx;
+                int flippedY = (_codec.GridSize - 1) - gy;
+                int flippedIdx = flippedY * _codec.GridSize + flippedX;
+
+                if (_myGridWorld != null && _baseTarget != null)
+                {
+                    Vector3 impact = _myGridWorld.GetCellCenterWorld(flippedIdx);
+                    _baseTarget.PlayIncoming(impact, isHit);
+                }
+
+                if (_myGridMarks != null)
+                {
+                    if (isHit)
+                    {
+                        _myGridMarks.MarkHit(flippedIdx);
+                        _audioManager.PlayRandom(.8f, 1.2f,
+                            AudioManager.AudioType.Explosion,
+                            AudioManager.AudioType.BigExplosion,
+                            AudioManager.AudioType.HugeExplosion,
+                            AudioManager.AudioType.LargeExplosion
+                        );
+                    }
+                    else
+                    {
+                        _myGridMarks.MarkMiss(flippedIdx);
+                        _audioManager.PlayRandom(.8f, 1.2f,
+                            AudioManager.AudioType.BoatPlace,
+                            AudioManager.AudioType.BoatPlacement2
+                        );
+                    }
+                }
+
+                Log($"Shot result (DEFENDER flipped): idx={idx}->{flippedIdx} hit={isHit} sunk={isSunk} type={sunkTypeId}");
+            }
+        }
+
+        private Vector2 ReadPointer()
+        {
+            if (_pointerAction != null && _pointerAction.action != null)
+                return _pointerAction.action.ReadValue<Vector2>();
+            if (Mouse.current != null) return Mouse.current.position.ReadValue();
+            return new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+        }
+
+        private bool PrimaryPressed()
+        {
+            if (_primaryAction != null && _primaryAction.action != null)
+                return _primaryAction.action.WasPressedThisFrame();
+            return Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
+        }
+
+        private bool PrimaryReleased()
+        {
+            if (_primaryAction != null && _primaryAction.action != null)
+                return _primaryAction.action.WasReleasedThisFrame();
+            return Mouse.current != null && Mouse.current.leftButton.wasReleasedThisFrame;
+        }
+
+        private bool SecondaryPressed()
+        {
+            if (_secondaryAction != null && _secondaryAction.action != null)
+                return _secondaryAction.action.WasPressedThisFrame();
+            return Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame;
+        }
+
+        private bool RotateCWPressed()
+        {
+            if (_rotateCWAction != null && _rotateCWAction.action != null)
+                return _rotateCWAction.action.WasPressedThisFrame();
+            var kb = Keyboard.current;
+            return kb != null && kb.eKey.wasPressedThisFrame;
+        }
+
+        private bool RotateCCWPressed()
+        {
+            if (_rotateCCWAction != null && _rotateCCWAction.action != null)
+                return _rotateCCWAction.action.WasPressedThisFrame();
+            var kb = Keyboard.current;
+            return kb != null && kb.qKey.wasPressedThisFrame;
+        }
+
+        private void Log(string msg)
+        {
+            if (_verboseLogs) Debug.Log($"[DesktopGridInteractor] {msg}", this);
+        }
     }
 }

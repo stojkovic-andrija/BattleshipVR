@@ -1,6 +1,6 @@
 namespace BattleshipsVR.Net.Data
 {
-    /// <summary>Tiny server snapshot for client UI parity without trusting it</summary>
+    /// <summary>Tiny server snapshot for client UI parity without trusting it (Obsolete)</summary>
     public struct SettingsSnapshot
     {
         public byte gridSize;
